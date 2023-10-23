@@ -4,3 +4,7 @@
 /fid-tmp/
 # saved snap-shot
 /training-runs/
+# script
+/scripts/
+# vscode
+/.vscode/
