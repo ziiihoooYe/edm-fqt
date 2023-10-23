@@ -1,0 +1,43 @@
+// {
+//     "version": "0.2.0",
+//     "configurations": [
+//         {
+//             "name": "Debug edm",
+//             "type": "python",
+//             "request": "launch",
+//             "program": "~/miniconda3/envs/edm/bin/torchrun",
+//             "args": [
+//                 "--standalone",
+//                 "--nproc_per_node=8",
+//                 "train.py",
+//                 "--outdir=training-runs",
+//                 "--data=datasets/cifar10-32x32.zip",
+//                 "--cond=1",
+//                 "--arch=ddpmpp",
+//                 "--batch-gpu=32",
+//             ],
+//             "console": "integratedTerminal",
+//             "env": {
+//                 // "NCCL_DEBUG": "INFO",
+//                 // "NCCL_DEBUG_SUBSYS": "ALL",
+//                 // "TORCH_DISTRIBUTED_DEBUG": "INFO",
+//                 // "NCCL_BLOCKING_WAIT": "1",
+//                 // "NCCL_IB_TIMEOUT": "20"
+//             }
+//         }
+//     ]
+// }
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "quantization test",
+            "type": "python",
+            "request": "launch",
+            "program": "~/edm/torch_utils/quant_test.py",
+            "args": [
+            ],
+            "console": "integratedTerminal"
+        }
+    ]
+}

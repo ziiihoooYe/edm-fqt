@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../lsq-net"
+		},
+		{
+			"path": "../../LSQplus"
+		}
+	],
+	"settings": {}
+}

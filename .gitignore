@@ -1,0 +1,6 @@
+# dataset
+/datasets/
+# temp files
+/fid-tmp/
+# saved snap-shot
+/training-runs/
