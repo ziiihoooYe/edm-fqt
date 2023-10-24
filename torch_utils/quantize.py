@@ -769,8 +769,7 @@ class Conv2dQ(Function):
         
         # weight gradient (switch back option)
         if QuantizationConfig.switch_back:
-            _input_q.data = _input.data
-            grad_weight = torch.nn.grad.conv2d_weight(_input_q, weight_q.size(), grad_output, groups=groups, stride=stride, padding=padding)
+            grad_weight = torch.nn.grad.conv2d_weight(_input, weight_q.size(), grad_output, groups=groups, stride=stride, padding=padding)
         else:
             grad_weight = torch.nn.grad.conv2d_weight(_input_q, weight_q.size(), grad_output, groups=groups, stride=stride, padding=padding)
         
