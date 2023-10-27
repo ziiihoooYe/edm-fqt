@@ -4,3 +4,5 @@
 /fid-tmp/
 # saved snap-shot
 /training-runs/
+# pycache
+**/__pycache__/

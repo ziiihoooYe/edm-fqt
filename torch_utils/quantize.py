@@ -16,14 +16,14 @@ class QuantizationConfig:
     quantize_activation = True
     quantize_weights = True
     quantize_gradient = True
-    switch_back = False
+    switch_back = True
 
     # quantization bit number
     activation_num_bit = 32 # 32
     weight_num_bit = 32 # 32
     bias_num_bit = 16
     backward_num_bit = 32
-    bweight_num_bit = 17
+    bweight_num_bit = 32
 
     # quantization choice
     per_channel = True
@@ -769,8 +769,7 @@ class Conv2dQ(Function):
         
         # weight gradient (switch back option)
         if QuantizationConfig.switch_back:
-            _input_q.data = _input.data
-            grad_weight = torch.nn.grad.conv2d_weight(_input_q, weight_q.size(), grad_output, groups=groups, stride=stride, padding=padding)
+            grad_weight = torch.nn.grad.conv2d_weight(_input, weight_q.size(), grad_output, groups=groups, stride=stride, padding=padding)
         else:
             grad_weight = torch.nn.grad.conv2d_weight(_input_q, weight_q.size(), grad_output, groups=groups, stride=stride, padding=padding)
         

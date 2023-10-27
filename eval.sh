@@ -20,6 +20,6 @@ do
 
     # Calculate FID
     torchrun --standalone --nproc_per_node=7 fid.py calc --images=fid-tmp \
-      --ref=https://nvlabs-fi-cdn.nvidia.com/edm/fid-refs/cifar10-32x32.npz --pkl=${file_name} --out_dir='.' --file_n='fid_result_fqt.txt'
+      --ref=https://nvlabs-fi-cdn.nvidia.com/edm/fid-refs/cifar10-32x32.npz --pkl=${file_name} --out_dir='.' --file_n='fid_result_fqt_switchback.txt'
   fi
 done
