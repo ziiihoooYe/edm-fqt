@@ -4,5 +4,9 @@
 /fid-tmp/
 # saved snap-shot
 /training-runs/
-# pycache
+# script
+/scripts/
+# vscode
+/.vscode/
+# cache
 **/__pycache__/
