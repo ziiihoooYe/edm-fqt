@@ -78,80 +78,89 @@ class Round(Function):
 
 
 #----------------------------------------------------------------------------
-# Unified routine for initializing weights and biases.
-
+# unified routine for initializing weights and biases. (by edm)
 def weight_init(shape, mode, fan_in, fan_out):
-    if mode == 'xavier_uniform': return np.sqrt(6 / (fan_in + fan_out)) * (torch.rand(*shape) * 2 - 1)
-    if mode == 'xavier_normal':  return np.sqrt(2 / (fan_in + fan_out)) * torch.randn(*shape)
-    if mode == 'kaiming_uniform': return np.sqrt(3 / fan_in) * (torch.rand(*shape) * 2 - 1)
-    if mode == 'kaiming_normal':  return np.sqrt(1 / fan_in) * torch.randn(*shape)
+    if mode == 'xavier_uniform':
+        return np.sqrt(6 / (fan_in + fan_out)) * (torch.rand(*shape) * 2 - 1)
+    if mode == 'xavier_normal':
+        return np.sqrt(2 / (fan_in + fan_out)) * torch.randn(*shape)
+    if mode == 'kaiming_uniform':
+        return np.sqrt(3 / fan_in) * (torch.rand(*shape) * 2 - 1)
+    if mode == 'kaiming_normal':
+        return np.sqrt(1 / fan_in) * torch.randn(*shape)
     raise ValueError(f'Invalid init mode "{mode}"')
 
 
 #----------------------------------------------------------------------------
-# conv2d grad quantizer (per-sample option)
+# conv2d grad quantizer (per-sample option) - (B, C, H, W)
 def grad_quantize_conv(grad, num_bit_grad, per_sample=False):
     if per_sample:
-        # 在B维度上计算每个样本的最大值和最小值
+        # calculate the maximum and minimum values of each sample on the B dimension
         max_vals, _ = grad.reshape(grad.size(0), -1).max(1)
         min_vals, _ = grad.reshape(grad.size(0), -1).min(1)
         
-        # 计算div_grad和zero_point
+        # calculate div_grad and zero_point
         div_grad = (2 ** num_bit_grad) / (max_vals - min_vals + 1e-9)
         zero_point = min_vals
         
-        # 扩展形状以匹配grad_output
+        # extend the shape to match grad_output
         div_grad = div_grad.view(-1, 1, 1, 1)
         zero_point = zero_point.view(-1, 1, 1, 1)
     else:
         max_vals = grad.max()
         min_vals = grad.min()
         
-        # 计算div_grad和zero_point
+        # calculate div_grad and zero_point
         div_grad = (2 ** num_bit_grad) / (max_vals - min_vals + 1e-9)
         zero_point = min_vals
         
-    # 缩放梯度并进行四舍五入
+    # scale gradient and round
     grad = ((Round.apply((grad - zero_point) * div_grad)) / div_grad) + zero_point
     
     return grad
 
 
 #----------------------------------------------------------------------------
-# linear grad quantizer (per-sample option)
+# linear grad quantizer (per-sample option) - (B, C)
 def grad_quantize_linear(grad, num_bit_grad, per_sample=False):
     if per_sample:
-        # 在B维度上计算每个样本的最大值和最小值
+        # calculate the maximum and minimum values of each sample in dimension B
         max_vals, _ = grad.reshape(grad.size(0), -1).max(1)
         min_vals, _ = grad.reshape(grad.size(0), -1).min(1)
         
-        # 计算div_grad和zero_point
+        # calculate div_grad and zero_point
         div_grad = (2 ** num_bit_grad) / (max_vals - min_vals + 1e-9)
         zero_point = min_vals
         
-        # 扩展形状以匹配grad_output
+        # expand the shape to match grad_output
         div_grad = div_grad.view(-1, 1)
         zero_point = zero_point.view(-1, 1)
     else:
         max_vals = grad.max()
         min_vals = grad.min()
         
-        # 计算div_grad和zero_point
+        # calculate div_grad and zero_point
         div_grad = (2 ** num_bit_grad) / (max_vals - min_vals + 1e-9)
         zero_point = min_vals
         
-    # 缩放梯度并进行四舍五入
+    # scale the gradient and round it
     grad = ((Round.apply((grad - zero_point) * div_grad)) / div_grad) + zero_point
     
     return grad
 
 
 #----------------------------------------------------------------------------
-# forward activation quantization: a -> activation, s -> scale, b -> bias, num_bit -> forward activation number of bit
+# forward activation quantization: 
+# a -> activation, 
+# s -> scale, 
+# b -> bias, 
+# num_bit -> forward activation number of bit
 def activation_quantize(a, s, b, num_bit):
     if num_bit == 32:
+        # full-precision forward activation
         a_q = a
     else:
+        # quantized forward activation
         Qn = -(2 ** (num_bit - 1))
         Qp = (2 ** (num_bit - 1)) - 1
         a_q = Round.apply(torch.div((a - b), (s + 1e-9)).clamp(Qn, Qp))
@@ -160,13 +169,20 @@ def activation_quantize(a, s, b, num_bit):
 
 
 #----------------------------------------------------------------------------
-# backward activation quantization: a -> activation, s -> scale, b -> bias, g -> step, num_bit -> forward activation number of bit
+# backward activation quantization: 
+# a -> activation, 
+# s -> scale, 
+# b -> bias, 
+# g -> step size, 
+# num_bit -> forward activation number of bit
 def activation_quantizer_backward(grad_act, a, s, b, g, num_bit):
     if num_bit == 32:
+        # full-precision backward activation/activation_quantizer_bias/activation_quantizer_scale gradient
         grad_act = grad_act
         grad_b = torch.Tensor([0]).cuda()
         grad_s = torch.Tensor([0]).cuda()
     else:
+        # quantized backward activation/activation_quantizer_bias/activation_quantizer_scale gradient
         Qn = -(2 ** (num_bit - 1))
         Qp = (2 ** (num_bit - 1)) - 1
         q_a = (a - b) / (s + 1e-9)
@@ -174,7 +190,6 @@ def activation_quantizer_backward(grad_act, a, s, b, g, num_bit):
         bigger = (q_a > Qp).float()  # 1.0/0.0
         between = 1.0 - smaller - bigger  # 1.0/0.0
 
-        # quantization scale and bias gradients
         grad_s = ((smaller * Qn + bigger * Qp +
                 between * Round.apply(q_a) -
                 between * q_a) * grad_act * g).sum().unsqueeze(dim=0)
@@ -186,15 +201,20 @@ def activation_quantizer_backward(grad_act, a, s, b, g, num_bit):
 
 
 #----------------------------------------------------------------------------
-# forward weight quantization: w -> weight, s -> scale, num_bit -> forward weight number of bit (per-channel option)
+# forward weight quantization: 
+# w -> weight, 
+# s -> scale, 
+# num_bit -> forward weight number of bit (per-channel option)
 def weight_quantize(w, s, num_bit, per_channel):
     if num_bit == 32:
+        # full-precision forward weight
         w_q = w
     else:
+        # quantized forward weight
         Qn = -(2 ** (num_bit - 1))
         Qp = (2 ** (num_bit - 1)) - 1
 
-        # quantize weight
+        # per-channel option
         if per_channel:
             sizes = w.size()
             w = w.contiguous().view(w.size()[0], -1)
@@ -209,9 +229,12 @@ def weight_quantize(w, s, num_bit, per_channel):
             w_q = w_q * s
     return w_q
 
-
 #----------------------------------------------------------------------------
-# backward weight quantization: w-> weight, s -> scale, g -> step, num_bit -> forward weight number of bit (per-channel option)
+# backward weight quantization: 
+# w-> weight, 
+# s -> scale, 
+# g -> step, 
+# num_bit -> forward weight number of bit (per-channel option)
 def weight_quantizer_backward(grad_weight, w, s, g, num_bit, per_channel):
     s_size = s.size()
 
@@ -220,11 +243,15 @@ def weight_quantizer_backward(grad_weight, w, s, g, num_bit, per_channel):
         QuantizationConfig.add_grad(grad_weight)
 
     if num_bit == 32:
+        # full-precision backward weight/weight_quantizer_scale gradient
         grad_weight = grad_weight
         grad_s = torch.Tensor([0]).expand(s.size()).cuda()
     else:
+        # quantized backward weight/weight_quantizer_scale gradient
         Qn = -(2 ** (num_bit - 1))
         Qp = (2 ** (num_bit - 1)) - 1
+        
+        # per-channel option
         if per_channel:
             sizes = w.size()
             w = w.contiguous().view(w.size()[0], -1)
@@ -257,8 +284,15 @@ def weight_quantizer_backward(grad_weight, w, s, g, num_bit, per_channel):
 
 
 #----------------------------------------------------------------------------
-# return: s -> scale, b -> bias, g -> step, init_stat
+# activation quantizer initialization state update function: 
+# s -> scale, 
+# b -> bias, 
+# g -> step, 
+# init_stat -> initialization state (< batch_init -> initialization, = batch_init -> initialization done),
+# num_bit -> forward activation number of bit,
+# batch_init -> batch initialization number max
 def activation_quantizer_init_update(activation, s, b, g, num_bit, init_stat, batch_init = QuantizationConfig.batch_init):
+    # initialization state == 0 -> initialize the scale and bias
     if init_stat.item() == 0:
         Qp = (2 ** (num_bit - 1)) - 1
         Qn = -(2 ** (num_bit - 1))
@@ -268,12 +302,15 @@ def activation_quantizer_init_update(activation, s, b, g, num_bit, init_stat, ba
         max_a = activation.detach().max()
         min_a = activation.detach().min()
 
+        # initialize the scale and bias
         s.data = ((max_a - min_a + 1e-9)/(Qp - Qn)).unsqueeze(0)
         b.data = min_a - s.data * Qn
 
+        # update the initialization state
         init_stat += 1
         init_stat = init_stat.to(s.device)
 
+    # initialization state < batch_init -> update the scale and bias
     elif init_stat.item() < batch_init:
         Qp = (2 ** (num_bit - 1)) - 1
         Qn = -(2 ** (num_bit - 1))
@@ -282,26 +319,38 @@ def activation_quantizer_init_update(activation, s, b, g, num_bit, init_stat, ba
         max_a = activation.detach().max()
         min_a = activation.detach().min()
 
+        # update the scale and bias
         s.data = s.data*0.9 + 0.1 * (max_a - min_a + 1e-9)/(Qp - Qn)
         b.data = s.data*0.9 + 0.1 * (min_a - s.data * Qn)
         
+        # update the initialization state
         init_stat += 1
 
+    # initialization state == batch_init -> initialization done
     elif init_stat.item() == batch_init:
 
+        # update the initialization state
         init_stat += 1        
         
     return s, b, g, init_stat
 
 
 #----------------------------------------------------------------------------
-# return: s -> scale, g -> step, init_stat
+# weight quantizer initialization state update function: 
+# s -> scale, 
+# g -> step, 
+# init_stat -> initialization state (< batch_init -> initialization, = batch_init -> initialization done),
+# num_bit -> forward weight number of bit,
+# batch_init -> batch initialization number max,
+# per_channel -> per-channel option
 def weight_quantizer_init_update(weight, s, g, num_bit, init_stat, per_channel, batch_init = QuantizationConfig.batch_init):
+    # initialization state == 0 -> initialize the scale
     if init_stat == 0:
         Qp = (2 ** (num_bit - 1)) - 1
         div = 2 ** num_bit - 1
         g = 1.0/math.sqrt(weight.numel() * Qp)
 
+        # initialize the scale (per-channel option)
         if per_channel:
             weight_tmp = weight.detach().contiguous().view(
                 weight.size()[0], -1)
@@ -315,13 +364,17 @@ def weight_quantizer_init_update(weight, s, g, num_bit, init_stat, per_channel, 
             std = torch.std(weight.detach())
             s.data = (
                 max([torch.abs(mean-3*std), torch.abs(mean + 3*std)]) / div).unsqueeze(0)
+            
+        # update the initialization state
         init_stat += 1
         init_stat = init_stat.to(s.device)
 
+    # initialization state < batch_init -> update the scale
     elif init_stat < batch_init:
         Qp = (2 ** (num_bit - 1)) - 1
         div = 2 ** num_bit - 1
 
+        # update the scale (per-channel option)
         if per_channel:
             weight_tmp = weight.detach().contiguous().view(
                 weight.size()[0], -1)
@@ -335,195 +388,202 @@ def weight_quantizer_init_update(weight, s, g, num_bit, init_stat, per_channel, 
             std = torch.std(weight.detach())
             s.data = s.data*0.9 + 0.1 * \
                 max([torch.abs(mean-3*std), torch.abs(mean + 3*std)]) / div
+                
+        # update the initialization state
         init_stat += 1
 
+    # initialization state == batch_init -> initialization done
     elif init_stat == batch_init:
+        
+        # update the initialization state
         init_stat += 1
         
     return s, g, init_stat
 
 
-class QuantizeA(Function):
-    @staticmethod
-    def forward(ctx, a, s, b, g, num_bit):
-        ctx.save_for_backward(a, s, b)
-        ctx.other = g, num_bit
+#----------------------------------------------------------------------------
+# deprecated activation/weight quantizer class
+# class QuantizeA(Function):
+#     @staticmethod
+#     def forward(ctx, a, s, b, g, num_bit):
+#         ctx.save_for_backward(a, s, b)
+#         ctx.other = g, num_bit
 
-        if num_bit == 32:
-            a_q = a
-        else:
-            # quantize input
-            Qn = -(2 ** (num_bit - 1))
-            Qp = (2 ** (num_bit - 1)) - 1
-            a_q = Round.apply(torch.div((a - b), (s + 1e-9)).clamp(Qn, Qp))
-            a_q = a_q * s + b
+#         if num_bit == 32:
+#             a_q = a
+#         else:
+#             # quantize input
+#             Qn = -(2 ** (num_bit - 1))
+#             Qp = (2 ** (num_bit - 1)) - 1
+#             a_q = Round.apply(torch.div((a - b), (s + 1e-9)).clamp(Qn, Qp))
+#             a_q = a_q * s + b
 
-        return a_q
+#         return a_q
 
-    @staticmethod
-    def backward(ctx, grad_act):
-        a, s, b = ctx.saved_tensors
-        g, num_bit = ctx.other
+#     @staticmethod
+#     def backward(ctx, grad_act):
+#         a, s, b = ctx.saved_tensors
+#         g, num_bit = ctx.other
 
-        if num_bit == 32:
-            grad_act = grad_act
-            grad_b = torch.Tensor([0]).cuda()
-            grad_s = torch.Tensor([0]).cuda()
-        else:
-            Qn = -(2 ** (num_bit - 1))
-            Qp = (2 ** (num_bit - 1)) - 1
-            q_a = (a - b) / (s + 1e-9)
-            smaller = (q_a < Qn).float()  # 1.0/0.0
-            bigger = (q_a > Qp).float()  # 1.0/0.0
-            between = 1.0 - smaller - bigger  # 1.0/0.0
+#         if num_bit == 32:
+#             grad_act = grad_act
+#             grad_b = torch.Tensor([0]).cuda()
+#             grad_s = torch.Tensor([0]).cuda()
+#         else:
+#             Qn = -(2 ** (num_bit - 1))
+#             Qp = (2 ** (num_bit - 1)) - 1
+#             q_a = (a - b) / (s + 1e-9)
+#             smaller = (q_a < Qn).float()  # 1.0/0.0
+#             bigger = (q_a > Qp).float()  # 1.0/0.0
+#             between = 1.0 - smaller - bigger  # 1.0/0.0
 
-            # quantization scale and bias gradients
-            grad_s = ((smaller * Qn + bigger * Qp +
-                    between * Round.apply(q_a) -
-                    between * q_a) * grad_act * g).sum().unsqueeze(dim=0)
-            grad_b = ((smaller + bigger) * grad_act * g).sum().unsqueeze(dim=0)
+#             # quantization scale and bias gradients
+#             grad_s = ((smaller * Qn + bigger * Qp +
+#                     between * Round.apply(q_a) -
+#                     between * q_a) * grad_act * g).sum().unsqueeze(dim=0)
+#             grad_b = ((smaller + bigger) * grad_act * g).sum().unsqueeze(dim=0)
 
-            grad_act = between * grad_act
+#             grad_act = between * grad_act
 
-        return grad_act, grad_s, grad_b, None, None
-
-
-class QuantizeW(Function):
-    @staticmethod
-    def forward(ctx, w, s, g, num_bit, per_channel):
-        ctx.save_for_backward(w, s)
-        ctx.other = g, num_bit, per_channel
-
-        if num_bit == 32:
-            w_q = w
-        else:
-            Qn = -(2 ** (num_bit - 1))
-            Qp = (2 ** (num_bit - 1)) - 1
-
-            # quantize weight
-            if per_channel:
-                sizes = w.size()
-                w = w.contiguous().view(w.size()[0], -1)
-                w = torch.transpose(w, 0, 1)
-                s = torch.broadcast_to(s, w.size())
-                w_q = Round.apply(torch.div(w, (s + 1e-9)).clamp(Qn, Qp))
-                w_q = w_q * s
-                w_q = torch.transpose(w_q, 0, 1)
-                w_q = w_q.contiguous().view(sizes)
-            else:
-                w_q = Round.apply(torch.div(w, (s + 1e-9)).clamp(Qn, Qp))
-                w_q = w_q * s
-        return w_q
-
-    @staticmethod
-    def backward(ctx, grad_weight):                
-        w, s = ctx.saved_tensors
-        g, num_bit, per_channel = ctx.other
-
-        s_size = s.size()
-
-        # collect gradients if needs
-        if QuantizationConfig.grad is not None:
-            QuantizationConfig.add_grad(grad_weight)
-
-        if num_bit == 32:
-            grad_weight = grad_weight
-            grad_s = torch.Tensor([0]).expand(s.size()).cuda()
-        else:
-            Qn = -(2 ** (num_bit - 1))
-            Qp = (2 ** (num_bit - 1)) - 1
-            if per_channel:
-                sizes = w.size()
-                w = w.contiguous().view(w.size()[0], -1)
-                w = torch.transpose(w, 0, 1)
-                s = torch.broadcast_to(s, w.size())
-                q_w = w / (s + 1e-9)
-                q_w = torch.transpose(q_w, 0, 1)
-                q_w = q_w.contiguous().view(sizes)
-            else:
-                q_w = w / (s + 1e-9)
-
-            smaller = (q_w < Qn).float()  # 1.0/0.0
-            bigger = (q_w > Qp).float()  # 1.0/0.0
-            between = 1.0 - smaller - bigger  # 1.0/0.0
-            if per_channel:
-                grad_s = ((smaller * Qn +
-                        bigger * Qp +
-                        between * Round.apply(q_w) - between * q_w)*grad_weight * g)
-                # print('s0: ' + str(grad_s.size()))
-                grad_s = grad_s.contiguous().view(grad_s.size()[0], -1).sum(dim=1)
-                # print('s1: ' + str(grad_s.size()))
-                grad_s = torch.broadcast_to(grad_s, s_size)
-                # print('s2: ' + str(grad_s.size()))
-            else:
-                grad_s = ((smaller * Qn +
-                        bigger * Qp +
-                        between * Round.apply(q_w) - between * q_w)*grad_weight * g).sum().unsqueeze(dim=0)
-                grad_s = torch.broadcast_to(grad_s, s_size)
-
-            grad_weight = between * grad_weight
-
-        return grad_weight, grad_s, None, None, None
+#         return grad_act, grad_s, grad_b, None, None
 
 
-class ActivationQuantizer(nn.Module):
-    def __init__(self, num_bit, num_bit_grad=None, batch_init=QuantizationConfig.batch_init):
-        super(ActivationQuantizer, self).__init__()
-        self.num_bit = num_bit
-        self.num_bit_grad = num_bit_grad
-        self.batch_init = batch_init
-        self.s = torch.nn.Parameter(torch.ones(1), requires_grad=True)
-        self.b = torch.nn.Parameter(torch.ones(1), requires_grad=True)
+# class QuantizeW(Function):
+#     @staticmethod
+#     def forward(ctx, w, s, g, num_bit, per_channel):
+#         ctx.save_for_backward(w, s)
+#         ctx.other = g, num_bit, per_channel
 
-        self.init_stat = torch.Tensor([0])
+#         if num_bit == 32:
+#             w_q = w
+#         else:
+#             Qn = -(2 ** (num_bit - 1))
+#             Qp = (2 ** (num_bit - 1)) - 1
 
-    def forward(self, activation):
-        if self.init_stat.item() == 0:
-            Qp = (2 ** (self.num_bit - 1)) - 1
-            Qn = -(2 ** (self.num_bit - 1))
-            self.g = 1.0/math.sqrt(activation.numel() * Qp)
+#             # quantize weight
+#             if per_channel:
+#                 sizes = w.size()
+#                 w = w.contiguous().view(w.size()[0], -1)
+#                 w = torch.transpose(w, 0, 1)
+#                 s = torch.broadcast_to(s, w.size())
+#                 w_q = Round.apply(torch.div(w, (s + 1e-9)).clamp(Qn, Qp))
+#                 w_q = w_q * s
+#                 w_q = torch.transpose(w_q, 0, 1)
+#                 w_q = w_q.contiguous().view(sizes)
+#             else:
+#                 w_q = Round.apply(torch.div(w, (s + 1e-9)).clamp(Qn, Qp))
+#                 w_q = w_q * s
+#         return w_q
+
+#     @staticmethod
+#     def backward(ctx, grad_weight):                
+#         w, s = ctx.saved_tensors
+#         g, num_bit, per_channel = ctx.other
+
+#         s_size = s.size()
+
+#         # collect gradients if needs
+#         if QuantizationConfig.grad is not None:
+#             QuantizationConfig.add_grad(grad_weight)
+
+#         if num_bit == 32:
+#             grad_weight = grad_weight
+#             grad_s = torch.Tensor([0]).expand(s.size()).cuda()
+#         else:
+#             Qn = -(2 ** (num_bit - 1))
+#             Qp = (2 ** (num_bit - 1)) - 1
+#             if per_channel:
+#                 sizes = w.size()
+#                 w = w.contiguous().view(w.size()[0], -1)
+#                 w = torch.transpose(w, 0, 1)
+#                 s = torch.broadcast_to(s, w.size())
+#                 q_w = w / (s + 1e-9)
+#                 q_w = torch.transpose(q_w, 0, 1)
+#                 q_w = q_w.contiguous().view(sizes)
+#             else:
+#                 q_w = w / (s + 1e-9)
+
+#             smaller = (q_w < Qn).float()  # 1.0/0.0
+#             bigger = (q_w > Qp).float()  # 1.0/0.0
+#             between = 1.0 - smaller - bigger  # 1.0/0.0
+#             if per_channel:
+#                 grad_s = ((smaller * Qn +
+#                         bigger * Qp +
+#                         between * Round.apply(q_w) - between * q_w)*grad_weight * g)
+#                 # print('s0: ' + str(grad_s.size()))
+#                 grad_s = grad_s.contiguous().view(grad_s.size()[0], -1).sum(dim=1)
+#                 # print('s1: ' + str(grad_s.size()))
+#                 grad_s = torch.broadcast_to(grad_s, s_size)
+#                 # print('s2: ' + str(grad_s.size()))
+#             else:
+#                 grad_s = ((smaller * Qn +
+#                         bigger * Qp +
+#                         between * Round.apply(q_w) - between * q_w)*grad_weight * g).sum().unsqueeze(dim=0)
+#                 grad_s = torch.broadcast_to(grad_s, s_size)
+
+#             grad_weight = between * grad_weight
+
+#         return grad_weight, grad_s, None, None, None
+
+
+# class ActivationQuantizer(nn.Module):
+#     def __init__(self, num_bit, num_bit_grad=None, batch_init=QuantizationConfig.batch_init):
+#         super(ActivationQuantizer, self).__init__()
+#         self.num_bit = num_bit
+#         self.num_bit_grad = num_bit_grad
+#         self.batch_init = batch_init
+#         self.s = torch.nn.Parameter(torch.ones(1), requires_grad=True)
+#         self.b = torch.nn.Parameter(torch.ones(1), requires_grad=True)
+
+#         self.init_stat = torch.Tensor([0])
+
+#     def forward(self, activation):
+#         if self.init_stat.item() == 0:
+#             Qp = (2 ** (self.num_bit - 1)) - 1
+#             Qn = -(2 ** (self.num_bit - 1))
+#             self.g = 1.0/math.sqrt(activation.numel() * Qp)
             
-            # Compute the maximum and minimum of the activation.
-            max_a = activation.detach().max()
-            min_a = activation.detach().min()
+#             # Compute the maximum and minimum of the activation.
+#             max_a = activation.detach().max()
+#             min_a = activation.detach().min()
 
-            self.s.data = ((max_a - min_a + 1e-9)/(Qp - Qn)).unsqueeze(0)
-            self.b.data = min_a - self.s.data * Qn
+#             self.s.data = ((max_a - min_a + 1e-9)/(Qp - Qn)).unsqueeze(0)
+#             self.b.data = min_a - self.s.data * Qn
 
-            self.init_stat += 1
-            self.init_stat = self.init_stat.to(self.s.device)
+#             self.init_stat += 1
+#             self.init_stat = self.init_stat.to(self.s.device)
 
-        elif self.init_stat.item() < self.batch_init:
-            Qp = (2 ** (self.num_bit - 1)) - 1
-            Qn = -(2 ** (self.num_bit - 1))
+#         elif self.init_stat.item() < self.batch_init:
+#             Qp = (2 ** (self.num_bit - 1)) - 1
+#             Qn = -(2 ** (self.num_bit - 1))
             
-            # Compute the maximum and minimum of the activation.
-            max_a = activation.detach().max()
-            min_a = activation.detach().min()
+#             # Compute the maximum and minimum of the activation.
+#             max_a = activation.detach().max()
+#             min_a = activation.detach().min()
 
-            self.s.data = self.s.data*0.9 + 0.1 * (max_a - min_a + 1e-9)/(Qp - Qn)
-            self.b.data = self.s.data*0.9 + 0.1 * (min_a - self.s.data * Qn)
+#             self.s.data = self.s.data*0.9 + 0.1 * (max_a - min_a + 1e-9)/(Qp - Qn)
+#             self.b.data = self.s.data*0.9 + 0.1 * (min_a - self.s.data * Qn)
             
-            self.init_stat += 1
+#             self.init_stat += 1
 
-        elif self.init_stat.item() == self.batch_init:
+#         elif self.init_stat.item() == self.batch_init:
 
-            self.init_stat += 1        
+#             self.init_stat += 1        
 
-        if QuantizationConfig.quantize_activation:
-            a_q = QuantizeA.apply(activation, self.s, self.b,
-                                  self.g, self.num_bit)
-        else:
-            a_q = QuantizeA.apply(activation, self.s, self.b,
-                                  self.g, 32)
+#         if QuantizationConfig.quantize_activation:
+#             a_q = QuantizeA.apply(activation, self.s, self.b,
+#                                   self.g, self.num_bit)
+#         else:
+#             a_q = QuantizeA.apply(activation, self.s, self.b,
+#                                   self.g, 32)
         
-        # print('self.s.grad: ' + str(self.s.grad))
-        # print('self.b.grad: ' + str(self.b.grad))
+#         # print('self.s.grad: ' + str(self.s.grad))
+#         # print('self.b.grad: ' + str(self.b.grad))
             
-        return a_q
+#         return a_q
 
 
-class WeightQuantizer(nn.Module):
+# class WeightQuantizer(nn.Module):
     def __init__(self, num_bit, num_bit_grad, channel_num=None, per_channel=False, batch_init=QuantizationConfig.batch_init):
         super(WeightQuantizer, self).__init__()
         self.num_bit = num_bit
@@ -593,15 +653,18 @@ class WeightQuantizer(nn.Module):
 
 
 #----------------------------------------------------------------------------
-# custom linear function (lsq+, per_channel weight forward, per_sample gradient backward)
+# custom fqt linear function 
+# forward options: lsq+, per_channel weight forward
+# backward options: gradient quantization, per_sample gradient backward, switch back
 class LinearQ(Function):
+    
     @staticmethod
     def forward(ctx, _input, weight, bias,
                 a_s, a_b, a_g, a_num_bit, 
                 w_s, w_g, w_num_bit, per_channel,
                 backward_num_bit, per_sample):
         
-        # quantize input & weight
+        # quantize input & weight - lsq+ option & per_channel weight option
         _input_q = activation_quantize(_input, a_s, a_b, a_num_bit)
         weight_q = weight_quantize(weight, w_s, w_num_bit, per_channel)
         
@@ -615,7 +678,7 @@ class LinearQ(Function):
         # linear manipulation
         output = _input_q @ weight_q.to(_input_q.dtype).t()
         
-        # bias
+        # bias manipulation
         if bias is not None:
             output = output.add_(bias.to(_input.dtype))
             
@@ -623,20 +686,21 @@ class LinearQ(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # obtain saved tensors/params
         _input_q, weight_q, bias, a_s, a_b, w_s = ctx.saved_tensors
         _input, weight = ctx.other
         a_g, a_num_bit = ctx.a_param 
         w_g, w_num_bit, per_channel = ctx.w_param 
         backward_num_bit, per_sample = ctx.back_param
         
-        # quantize gradient
+        # quantize output gradient - per_sample gradient option
         if QuantizationConfig.quantize_gradient:
             grad_output = grad_quantize_linear(grad_output, num_bit_grad=backward_num_bit, per_sample=per_sample)
 
-        # activation gradient
+        # input gradient
         grad_input = grad_output@weight_q
         
-        # weight gradient (switch back option)
+        # weight gradient - switch back option
         if QuantizationConfig.switch_back:
             grad_weight = grad_output.t()@_input
         else:
@@ -658,13 +722,16 @@ def linear_q(_input, weight, bias,
              a_s, a_b, a_g, a_num_bit, 
              w_s, w_g, w_num_bit, per_channel,
              backward_num_bit, per_sample):
+    
     return LinearQ.apply(_input, weight, bias,
                          a_s, a_b, a_g, a_num_bit, 
                          w_s, w_g, w_num_bit, per_channel,
                          backward_num_bit, per_sample)
 
 #----------------------------------------------------------------------------
-# Fully-connected layer.
+# custom fqt fully-connected layer class
+# forward options: lsq+, per_channel weight forward
+# backward options: gradient quantization, per_sample gradient backward, switch back
 @persistence.persistent_class
 class Linear(torch.nn.Module):
     def __init__(self, in_features, out_features, bias=True, init_mode='kaiming_normal', init_weight=1, init_bias=0):
@@ -698,22 +765,14 @@ class Linear(torch.nn.Module):
         self.batch_init = QuantizationConfig.batch_init
 
     def forward(self, x):
-        # x = self.a_quantizer(x)
-        # weight = self.w_quantizer(self.weight)
-
-        # x = x @ weight.to(x.dtype).t()
-        # if self.bias is not None:
-        #     x = x.add_(self.bias.to(x.dtype))
         
-        # update forward quantization param
-        # print0('linear before update - a_init_stat' + str(self.a_init_stat))
-        # print0('linear before update - w_init_stat' + str(self.w_init_stat))
+        # update initialization state & quantization params
         self.a_s, self.a_b, self.a_g, self.a_init_stat = activation_quantizer_init_update(x, self.a_s, self.a_b, self.a_g, self.a_num_bit, self.a_init_stat, batch_init = self.batch_init)
         self.w_s, self.w_g, self.w_init_stat = weight_quantizer_init_update(self.weight, self.w_s, self.w_g, self.w_num_bit, self.w_init_stat, self.per_channel, batch_init = self.batch_init)
-        # print0('linear after update - a_init_stat' + str(self.a_init_stat))
-        # print0('linear after update - w_init_stat' + str(self.w_init_stat))
         
-        # quantization linear manipulation
+        # custom linear function 
+        # forward: lsq+, per_channel weight forward
+        # backward: gradient quantization, per_sample gradient backward, switch back
         x = linear_q(_input=x, weight=self.weight, bias=self.bias, 
                      a_s=self.a_s, a_b=self.a_b, a_g=self.a_g, a_num_bit=self.a_num_bit, 
                      w_s=self.w_s, w_g=self.w_g, w_num_bit=self.w_num_bit, per_channel=self.per_channel,
@@ -723,7 +782,9 @@ class Linear(torch.nn.Module):
 
 
 #----------------------------------------------------------------------------
-# custom linear function (lsq+, per_channel weight forward, per_sample gradient backward)
+# custom linear function
+# forward options: lsq+, per_channel weight forward
+# backward options: gradient quantization, per_sample gradient backward, switch back
 class Conv2dQ(Function):
     @staticmethod
     def forward(ctx, _input, weight, bias, groups, stride, padding,
@@ -731,7 +792,7 @@ class Conv2dQ(Function):
                 w_s, w_g, w_num_bit, per_channel,
                 backward_num_bit, per_sample):
         
-        # quantize input & weight
+        # quantize input & weight - lsq+ option & per_channel weight option
         _input_q = activation_quantize(_input, a_s, a_b, a_num_bit)
         weight_q = weight_quantize(weight, w_s, w_num_bit, per_channel)
         
@@ -743,8 +804,10 @@ class Conv2dQ(Function):
         ctx.back_param = backward_num_bit, per_sample
         ctx.groups, ctx.stride, ctx.padding = groups, stride, padding
 
+        # conv2d manipulation
         output = conv2d(input=_input_q, weight=weight_q, stride=stride, padding=padding, groups=groups)
         
+        # bias manipulation
         if bias is not None:
             bias = bias.to(_input_q.dtype) if bias is not None else None
             output = output.add_(bias.reshape(1, -1, 1, 1))
@@ -753,6 +816,7 @@ class Conv2dQ(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # obtain saved tensors/params
         _input_q, weight_q, bias, a_s, a_b, w_s = ctx.saved_tensors
         _input, weight = ctx.other
         a_g, a_num_bit = ctx.a_param
@@ -760,14 +824,14 @@ class Conv2dQ(Function):
         backward_num_bit, per_sample = ctx.back_param
         groups, stride, padding =  ctx.groups, ctx.stride, ctx.padding
         
-        # quantize gradient
+        # quantize gradient - per_sample gradient option
         if QuantizationConfig.quantize_gradient:
             grad_output = grad_quantize_conv(grad_output, num_bit_grad=backward_num_bit, per_sample=per_sample)
 
-        # activation gradient
+        # input gradient
         grad_input = torch.nn.grad.conv2d_input(_input_q.size(), weight_q, grad_output, groups=groups, stride=stride, padding=padding)
         
-        # weight gradient (switch back option)
+        # weight gradient - switch back option
         if QuantizationConfig.switch_back:
             grad_weight = torch.nn.grad.conv2d_weight(_input, weight_q.size(), grad_output, groups=groups, stride=stride, padding=padding)
         else:
@@ -791,6 +855,7 @@ def conv2d_q(_input, weight, bias,
              w_s, w_g, w_num_bit, per_channel,
              backward_num_bit, per_sample,
              groups=1, stride=1, padding=1):
+    
     return Conv2dQ.apply(_input, weight, bias, groups, stride, padding,
                               a_s, a_b, a_g, a_num_bit, 
                               w_s, w_g, w_num_bit, per_channel,
@@ -804,6 +869,8 @@ class Conv2d(torch.nn.Module):
         in_channels, out_channels, kernel, bias=True, up=False, down=False,
         resample_filter=[1,1], fused_resample=False, init_mode='kaiming_normal', init_weight=1, init_bias=0,
     ):
+        
+        # module init
         assert not (up and down)
         super().__init__()
         self.in_channels = in_channels
@@ -818,14 +885,13 @@ class Conv2d(torch.nn.Module):
         f = f.ger(f).unsqueeze(0).unsqueeze(1) / f.sum().square()
         self.register_buffer('resample_filter', f if up or down else None)
         
-
         if self.weight is not None:
             # quantization params
             self.per_channel = QuantizationConfig.per_channel
             self.per_sample = QuantizationConfig.per_sample
             self.backward_num_bit = QuantizationConfig.backward_num_bit
             
-            # forward quantiation (lsq plus) params initialization 
+            # forward quantiation (lsq+) params initialization
             self.a_num_bit = QuantizationConfig.activation_num_bit
             self.w_num_bit = QuantizationConfig.weight_num_bit
             self.a_s = torch.nn.Parameter(torch.ones(1), requires_grad=True)
@@ -843,21 +909,10 @@ class Conv2d(torch.nn.Module):
 
     def forward(self, x):
         
-        # # quantize activation
-        # x = self.a_quantizer(x)
-        # # quantize weight 
-        # w = self.w_quantizer(self.weight).to(x.dtype) if self.weight is not None else None
-        # # bias
-        # b = self.bias.to(x.dtype) if self.bias is not None else None
-        
         if self.weight is not None:
-            # update forward quantization param
-            # print0('conv2d before update - a_init_stat' + str(self.a_init_stat))
-            # print0('conv2d before update - w_init_stat' + str(self.w_init_stat))
+            # update initialization state & quantization params
             self.a_s, self.a_b, self.a_g, self.a_init_stat = activation_quantizer_init_update(x, self.a_s, self.a_b, self.a_g, self.a_num_bit, self.a_init_stat, batch_init = self.batch_init)
             self.w_s, self.w_g, self.w_init_stat = weight_quantizer_init_update(self.weight, self.w_s, self.w_g, self.w_num_bit, self.w_init_stat, self.per_channel, batch_init = self.batch_init)
-            # print0('conv2d after update - a_init_stat' + str(self.a_init_stat))
-            # print0('conv2d after update - w_init_stat' + str(self.w_init_stat))
 
         #filter
         f = self.resample_filter.to(x.dtype) if self.resample_filter is not None else None
