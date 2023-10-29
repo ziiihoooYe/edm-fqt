@@ -1,0 +1,1 @@
+pkl file name:training-runs/switch-back_g32/network-snapshot-002509.pkl fid: 21.77564450036555

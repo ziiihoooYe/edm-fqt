@@ -22,7 +22,7 @@ class QuantizationConfig:
     activation_num_bit = 32 # 32
     weight_num_bit = 32 # 32
     bias_num_bit = 16
-    backward_num_bit = 32
+    backward_num_bit = 16
     bweight_num_bit = 32
 
     # quantization choice
