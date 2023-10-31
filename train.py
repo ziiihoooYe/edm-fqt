@@ -22,7 +22,8 @@ warnings.filterwarnings('ignore', 'Grad strides do not match bucket view strides
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1, 2, 3, 4, 5, 6, 7"
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2, 4, 5, 6"
-os.environ["TORCH_DISTRIBUTED_DEBUG"] = "INFO"
+# os.environ["TORCH_DISTRIBUTED_DEBUG"] = "INFO"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 #----------------------------------------------------------------------------
 # Parse a comma separated list of numbers or ranges and return a list of ints.
 # Example: '1,2,5-10' returns [1, 2, 5, 6, 7, 8, 9, 10]
