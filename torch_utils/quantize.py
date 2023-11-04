@@ -30,7 +30,7 @@ class QuantizationConfig:
     per_sample = True
 
     # class grads list
-    grad = None  # None if do not collect grads / []
+    grad = []  # None if do not collect grads / []
     grad_n = 0
     grad_mean = 0
     grad_M2 = 0
