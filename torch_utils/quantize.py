@@ -22,7 +22,7 @@ class QuantizationConfig:
     activation_num_bit = 32 # 32
     weight_num_bit = 32 # 32
     bias_num_bit = 16
-    backward_num_bit = 16
+    backward_num_bit = 8
     bweight_num_bit = 32
 
     # quantization choice
@@ -30,7 +30,7 @@ class QuantizationConfig:
     per_sample = True
 
     # class grads list
-    grad = []  # None if do not collect grads / []
+    grad = None  # None if do not collect grads / []
     grad_n = 0
     grad_mean = 0
     grad_M2 = 0
